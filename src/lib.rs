@@ -1,3 +1,5 @@
+use glam::DVec4;
+use itertools::{Chunks, Itertools};
 use reqwest::get;
 use image::{DynamicImage, GenericImageView, ImageReader, Rgba};
 use std::io::Cursor;
@@ -65,15 +67,47 @@ pub fn compare_images_chisquare(img1: &Vec<[u8; 3]>, img2: &Vec<[u8; 3]>) -> f64
         for i in 0..3 {
             let expected = block1[i] as f64;
             let observed = block2[i] as f64;
-            if expected > 0.0 {
-                chi_square += (observed - expected).powi(2) / expected;
-            }
+            // if expected > 0.0 {
+            chi_square += (observed - expected).powi(2);
+            // }
             total_count += 1;
         }
     }
 
     // Normalize by the total number of comparisons
     chi_square / total_count as f64
+}
+
+pub fn compare_images_chisquare_glam(img1: &Vec<[u8; 3]>, img2: &Vec<[u8; 3]>) -> f64 {
+    assert_eq!(img1.len()%4, 0);
+    assert_eq!(img2.len()%4, 0);
+
+    let mut chi_square = glam::DVec4::ZERO;
+    let total_count = img1.len().min(img2.len())*3;
+
+    // for (e, o) in img1.iter().zip(img2.iter()) {
+    //     let e1 = [0;4];
+    //     let e1 = e1[..3].copy_from_slice(&e);
+    // }
+
+    let img1: &[u8] = bytemuck::cast_slice(img1.as_slice());
+    let img2: &[u8] = bytemuck::cast_slice(img2.as_slice());
+    
+    let chunks = img1.iter().copied().zip(img2.iter().copied()).chunks(4);
+
+    for mut chunk in &chunks {
+        let (e1, o1) = chunk.next().unwrap();
+        let (e2, o2) = chunk.next().unwrap();
+        let (e3, o3) = chunk.next().unwrap();
+        let (e4, o4) = chunk.next().unwrap();
+
+        let expected = DVec4::new(e1 as f64, e2 as f64, e3 as f64, e4 as f64);
+        let observed = DVec4::new(o1 as f64, o2 as f64, o3 as f64, o4 as f64);
+
+        chi_square += (observed - expected).powf(2.0);    
+    }
+
+    chi_square.element_sum()/total_count as f64
 }
 
 fn save_image(image: &DynamicImage, path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -95,8 +129,8 @@ pub fn smallest_dimensions(img1: &image::DynamicImage, img2: &image::DynamicImag
 mod tests {
     use super::*;
 
-    const URLSMALL: &str = "https://cdn.discordapp.com/attachments/938538176841142362/1289993746829545534/20240926_032926.png?ex=6704124c&is=6702c0cc&hm=143dd6d5e1a026f465b9da2dfbc8b201ce8d16d419f9de961fab4f819f58e032&";
-    const URLBIG: &str = "https://cdn.discordapp.com/attachments/835182477583581225/1288688973639585854/20240926_032926.jpg?ex=6703f061&is=67029ee1&hm=ab8bca2e2eb47af7227dab57683187b232087479ba85c9044a06fe1cebdfb280&";
+    const URLSMALL: &str = "https://cdn.discordapp.com/attachments/938538176841142362/1289993746829545534/20240926_032926.png?ex=67060c8c&is=6704bb0c&hm=19064545dbfaec770458d616624d112694b77a9bcc2a84d44a4d97c2643e9900&";
+    const URLBIG: &str = "https://cdn.discordapp.com/attachments/835182477583581225/1288688973639585854/20240926_032926.jpg?ex=67069361&is=670541e1&hm=1971883f9d9b438f1b75c0612b13c1791ab4eab073db2622e034dc9a017bbb86&";
     const URLOTHER: &str = "https://www.rust-lang.org/logos/rust-logo-512x512.png";
     const URLSOMEWHATSIMILAR: &str = "https://i.kym-cdn.com/photos/images/original/002/247/111/ee3.png";
     const URLSOMEWHATSIMILAR2: &str = "https://i.kym-cdn.com/photos/images/original/002/255/853/87e.jpg";
@@ -122,7 +156,7 @@ mod tests {
         let blocks1 = average_gb_blocks(&img1, 10, 10);
         let blocks2 = average_gb_blocks(&img2, 10, 10);
         let result = compare_images_chisquare(&blocks1, &blocks2);
-        assert!(result < 1.0);
+        assert!(result < 5.0);
     }
 
     #[tokio::test]
@@ -134,4 +168,14 @@ mod tests {
         let result = compare_images_chisquare(&blocks1, &blocks2);
         assert!(result > 1.0);
     }
-}
+
+    #[tokio::test]
+    async fn chisquared_comparison() {
+        let img1 = download_image(URLSOMEWHATSIMILAR).await.unwrap();
+        let img2 = download_image(URLSOMEWHATSIMILAR2).await.unwrap();
+        let blocks1 = average_gb_blocks(&img1, 10, 10);
+        let blocks2 = average_gb_blocks(&img2, 10, 10);
+        let result_std = compare_images_chisquare(&blocks1, &blocks2);
+        let result_simd = compare_images_chisquare_glam(&blocks1, &blocks2);
+        assert_eq!(result_simd, result_std);
+    }}
